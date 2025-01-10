@@ -1,4 +1,4 @@
-// modules/getPageLinks.js
+// Обновленный getPageLinks.js
 import fs from 'fs-extra';
 import puppeteer from 'puppeteer';
 
@@ -6,10 +6,11 @@ const LINKS_JSON_PATH = './data/links.json';
 const FORUM_URL = 'https://forum.onliner.by/viewforum.php?f=53';
 
 async function getPageLinks() {
-    // 1. Удаляем старый links.json, если он существует
+    // 1. Читаем уже собранные ссылки, если файл существует
+    let existingLinks = [];
     if (await fs.pathExists(LINKS_JSON_PATH)) {
-        await fs.remove(LINKS_JSON_PATH);
-        console.log(`Старый файл ${LINKS_JSON_PATH} удалён.`);
+        existingLinks = await fs.readJson(LINKS_JSON_PATH);
+        console.log(`Найдено ${existingLinks.length} уже собранных ссылок.`);
     }
 
     // 2. Запускаем Puppeteer
@@ -61,13 +62,14 @@ async function getPageLinks() {
         return hrefs;
     });
 
-    // 7. Удаляем дубликаты ссылок
-    const uniqueLinks = [...new Set(links)];
-    console.log(`Найдено ${uniqueLinks.length} уникальных ссылок на страницы форума.`);
+    // 7. Удаляем дубликаты ссылок и исключаем уже собранные
+    const uniqueLinks = [...new Set(links)].filter(link => !existingLinks.includes(link));
+    console.log(`Найдено ${uniqueLinks.length} новых уникальных ссылок.`);
 
-    // 8. Сохраняем ссылки в links.json
-    await fs.outputJson(LINKS_JSON_PATH, uniqueLinks, { spaces: 2 });
-    console.log(`Собранные ссылки сохранены в ${LINKS_JSON_PATH}`);
+    // 8. Сохраняем новые ссылки, объединяя с уже существующими
+    const allLinks = [...existingLinks, ...uniqueLinks];
+    await fs.outputJson(LINKS_JSON_PATH, allLinks, { spaces: 2 });
+    console.log(`Собранные ссылки обновлены и сохранены в ${LINKS_JSON_PATH}`);
 
     // 9. Закрываем браузер
     await browser.close();
