@@ -1,92 +1,94 @@
-// parseTopics.js
 import fs from 'fs-extra';
 import puppeteer from 'puppeteer';
 
 const LINKS_JSON_PATH = './data/links.json';
 const TOPICS_JSON_PATH = './data/topics.json';
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 async function parseTopics() {
+    console.log(`[${new Date().toISOString()}] >>> Проверяем наличие файла ${LINKS_JSON_PATH}`);
     if (!await fs.pathExists(LINKS_JSON_PATH)) {
         throw new Error(`Файл ${LINKS_JSON_PATH} не найден.`);
     }
 
     const links = await fs.readJson(LINKS_JSON_PATH);
-    console.log(`Найдено ${links.length} ссылок для парсинга.`);
-
     let existingTopics = [];
     if (await fs.pathExists(TOPICS_JSON_PATH)) {
         existingTopics = await fs.readJson(TOPICS_JSON_PATH);
-        console.log(`Найдено ${existingTopics.length} уже собранных подтем.`);
+        console.log(`[${new Date().toISOString()}] >>> Загружены существующие темы.`);
     }
 
-    const existingLinks = new Set(existingTopics.map(topic => topic.link));
-
-    const allTopics = [];
+    console.log(`[${new Date().toISOString()}] >>> Запуск браузера Puppeteer.`);
     const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
 
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-        const resourceType = req.resourceType();
-        if (['image', 'stylesheet', 'font'].includes(resourceType)) {
-            req.abort();
-        } else {
-            req.continue();
-        }
-    });
+    // Словарь для преобразования русскоязычных месяцев в числовой формат
+    const months = {
+        'января': '01',
+        'февраля': '02',
+        'марта': '03',
+        'апреля': '04',
+        'мая': '05',
+        'июня': '06',
+        'июля': '07',
+        'августа': '08',
+        'сентября': '09',
+        'октября': '10',
+        'ноября': '11',
+        'декабря': '12',
+    };
 
-    for (const [index, url] of links.entries()) {
-        if (existingLinks.has(url)) {
-            console.log(`Пропускаем уже собранную ссылку (${index + 1}/${links.length}): ${url}`);
-            continue;
-        }
+    // Функция для форматирования даты
+    const formatDate = (rawDate) => {
+        const [day, month, year] = rawDate.split(' ');
+        return `${day.padStart(2, '0')}.${months[month]}.${year}`;
+    };
 
+    let totalTopics = 0;
+
+    for (const url of links) {
         try {
-            console.log(`Парсинг страницы ${index + 1}/${links.length}: ${url}`);
+            console.log(`[${new Date().toISOString()}] >>> Переход на страницу: ${url}`);
             await page.goto(url, { waitUntil: 'networkidle2' });
 
-            await page.waitForSelector('ul.b-list-topics');
+            const topics = await page.evaluate((months) => {
+                const formatDate = (rawDate) => {
+                    const [day, month, year] = rawDate.split(' ');
+                    return `${day.padStart(2, '0')}.${months[month]}.${year}`;
+                };
 
-            const topics = await page.evaluate(() => {
-                const topicElements = document.querySelectorAll('ul.b-list-topics > li');
-                const extractedTopics = [];
+                return Array.from(document.querySelectorAll('ul.b-list-topics > li')).map(el => {
+                    const titleElement = el.querySelector('.topictitle');
+                    const dateElement = el.querySelector('.link-getlast[title]');
 
-                topicElements.forEach(el => {
-                    const titleElement = el.querySelector('div.b-lt-subj > h3 > a.topictitle');
-                    const title = titleElement ? titleElement.innerText.trim() : null;
+                    const rawDate = dateElement?.getAttribute('title');
+                    const formattedDate = rawDate ? formatDate(rawDate.split(' ')[0] + ' ' + rawDate.split(' ')[1] + ' ' + rawDate.split(' ')[2]) : null;
 
-                    const relativeLink = titleElement ? titleElement.getAttribute('href') : null;
-                    const link = relativeLink ? new URL(relativeLink, 'https://forum.onliner.by').href : null;
+                    return {
+                        title: titleElement?.textContent.trim(),
+                        link: titleElement ? new URL(titleElement.href, document.baseURI).href : null,
+                        date: formattedDate, // Форматированная дата
+                    };
+                }).filter(topic => topic.title && topic.link && topic.date);
+            }, months);
 
-                    const dateElement = el.querySelector('div.b-lt-author > a.link-getlast');
-                    const date = dateElement ? dateElement.innerText.trim() : null;
-
-                    if (title && link && date) {
-                        extractedTopics.push({ title, link, date });
-                    }
-                });
-
-                return extractedTopics;
-            });
-
-            console.log(`Найдено ${topics.length} подтем на странице.`);
-
-            allTopics.push(...topics);
-            await delay(1000);
+            for (const topic of topics) {
+                if (!existingTopics.some(t => t.link === topic.link)) {
+                    existingTopics.push(topic);
+                    totalTopics++;
+                    console.log(`[${new Date().toISOString()}] >>> Добавлена тема: ${topic.title}`);
+                    await fs.outputJson(TOPICS_JSON_PATH, existingTopics, { spaces: 2 });
+                }
+            }
         } catch (error) {
-            console.error(`Ошибка при парсинге страницы ${url} (${index + 1}/${links.length}):`, error);
+            console.error(`[${new Date().toISOString()}] >>> Ошибка при обработке страницы: ${url}`, error);
         }
     }
 
+    console.log(`[${new Date().toISOString()}] >>> Всего собрано тем: ${totalTopics}`);
+    console.log(`[${new Date().toISOString()}] >>> Закрытие браузера Puppeteer.`);
     await browser.close();
 
-    const uniqueTopics = [...new Map([...existingTopics, ...allTopics].map(item => [item.link, item])).values()];
-    console.log(`Всего собрано ${allTopics.length} подтем. После удаления дубликатов осталось ${uniqueTopics.length} уникальных подтем.`);
-
-    await fs.outputJson(TOPICS_JSON_PATH, uniqueTopics, { spaces: 2 });
-    console.log(`Собранные данные сохранены в ${TOPICS_JSON_PATH}`);
+    return existingTopics;
 }
 
 export default parseTopics;

@@ -1,78 +1,62 @@
-// Обновленный getPageLinks.js
 import fs from 'fs-extra';
 import puppeteer from 'puppeteer';
 
 const LINKS_JSON_PATH = './data/links.json';
-const FORUM_URL = 'https://forum.onliner.by/viewforum.php?f=53';
+const FORUM_URL = 'https://forum.onliner.by/viewforum.php?f=53&start=0';
 
 async function getPageLinks() {
-    // 1. Читаем уже собранные ссылки, если файл существует
+    console.log(`[${new Date().toISOString()}] >>> Проверяем наличие файла ${LINKS_JSON_PATH}`);
     let existingLinks = [];
     if (await fs.pathExists(LINKS_JSON_PATH)) {
         existingLinks = await fs.readJson(LINKS_JSON_PATH);
-        console.log(`Найдено ${existingLinks.length} уже собранных ссылок.`);
+        console.log(`[${new Date().toISOString()}] >>> Найдено ${existingLinks.length} уже собранных ссылок.`);
     }
 
-    // 2. Запускаем Puppeteer
+    console.log(`[${new Date().toISOString()}] >>> Запуск браузера Puppeteer.`);
     const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
 
-    // 3. Отключаем загрузку ненужных ресурсов для ускорения
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-        const resourceType = req.resourceType();
-        if (['image', 'stylesheet', 'font'].includes(resourceType)) {
-            req.abort();
-        } else {
-            req.continue();
-        }
+        if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
+        else req.continue();
     });
 
-    // 4. Переходим на страницу форума
+    console.log(`[${new Date().toISOString()}] >>> Переход на страницу форума: ${FORUM_URL}`);
     await page.goto(FORUM_URL, { waitUntil: 'networkidle2' });
-    console.log(`Перешли на страницу форума: ${FORUM_URL}`);
 
-    // 5. Проверяем наличие кнопки "exppages-ttl" и нажимаем её
     const expandButtonSelector = 'a.exppages-ttl';
     const expandButton = await page.$(expandButtonSelector);
 
     if (expandButton) {
+        console.log(`[${new Date().toISOString()}] >>> Нажатие кнопки для раскрытия дополнительных страниц.`);
         await expandButton.click();
-        console.log('Кнопка "exppages-ttl" нажата для раскрытия дополнительных страниц.');
-
-        // Ждём появления расширенной пагинации
-        await page.waitForSelector('div.b-pages.active-droppages ul.pages-fastnav', { timeout: 5000 });
-        console.log('Расширенная пагинация загружена.');
+        await page.waitForSelector('div.b-pages.active-droppages ul.pages-fastnav', { timeout: 10000 });
+        console.log(`[${new Date().toISOString()}] >>> Расширенная пагинация загружена.`);
     } else {
-        console.log('Кнопка "exppages-ttl" не найдена. Возможно, все страницы уже отображены.');
+        console.log(`[${new Date().toISOString()}] >>> Кнопка "exppages-ttl" не найдена. Все страницы уже отображены.`);
     }
 
-    // 6. Извлекаем все ссылки на страницы пагинации
+    console.log(`[${new Date().toISOString()}] >>> Сбор ссылок на страницы пагинации.`);
     const links = await page.evaluate(() => {
         const linkElements = document.querySelectorAll('div.b-pages a[href*="viewforum.php?f=53&start="]');
-        const hrefs = [];
-
-        linkElements.forEach(el => {
-            const href = el.getAttribute('href');
-            if (href && !href.includes('#')) { // Исключаем ссылки с '#'
-                hrefs.push(new URL(href, 'https://forum.onliner.by').href);
-            }
-        });
-
-        return hrefs;
+        return Array.from(linkElements).map(el => new URL(el.href, document.baseURI).href);
     });
 
-    // 7. Удаляем дубликаты ссылок и исключаем уже собранные
+    console.log(`[${new Date().toISOString()}] >>> Найдено ${links.length} ссылок.`);
     const uniqueLinks = [...new Set(links)].filter(link => !existingLinks.includes(link));
-    console.log(`Найдено ${uniqueLinks.length} новых уникальных ссылок.`);
+    console.log(`[${new Date().toISOString()}] >>> Уникальные ссылки: ${uniqueLinks.length} новых ссылок.`);
 
-    // 8. Сохраняем новые ссылки, объединяя с уже существующими
-    const allLinks = [...existingLinks, ...uniqueLinks];
-    await fs.outputJson(LINKS_JSON_PATH, allLinks, { spaces: 2 });
-    console.log(`Собранные ссылки обновлены и сохранены в ${LINKS_JSON_PATH}`);
+    for (const link of uniqueLinks) {
+        existingLinks.push(link);
+        await fs.outputJson(LINKS_JSON_PATH, existingLinks, { spaces: 2 });
+        console.log(`[${new Date().toISOString()}] >>> Добавлена ссылка: ${link}`);
+    }
 
-    // 9. Закрываем браузер
+    console.log(`[${new Date().toISOString()}] >>> Закрытие браузера Puppeteer.`);
     await browser.close();
+
+    return existingLinks;
 }
 
 export default getPageLinks;
