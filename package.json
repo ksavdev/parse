@@ -5,8 +5,11 @@
   "main": "main.js",
   "dependencies": {
     "chalk": "^5.4.1",
+    "compromise": "^14.14.3",
     "fs-extra": "^10.0.0",
-    "puppeteer": "^19.0.0"
+    "natural": "^8.0.1",
+    "puppeteer": "^19.0.0",
+    "stopword": "^3.1.4"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
